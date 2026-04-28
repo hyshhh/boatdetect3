@@ -60,7 +60,7 @@ def _vlm_infer(image_b64: str, prompt_mode: str = "detailed") -> dict:
             "## hull_box 坐标（仅模糊时需要）\n"
             "- [x1, y1, x2, y2]：弦号文字的边界框，(x1,y1)为左上角，(x2,y2)为右下角\n"
             "- 相对坐标 0.0~1.0（左上角原点，右下角为1.0）\n"
-            "- **仅当 clarity=\"blurry\" 时**才返回 hull_box 坐标（用于二次精细识别）\n"
+            "- **仅当 clarity=\"blurry\" 时**才返回 hull_box 坐标\n"
             "- clarity=\"clear\" 或无弦号时，hull_box 返回空数组 []\n\n"
             "## clarity\n"
             '- "clear"：文字清晰可辨；"blurry"：文字模糊但仍尝试读出；无弦号时返回空字符串\n\n'
@@ -92,7 +92,7 @@ def _vlm_infer(image_b64: str, prompt_mode: str = "detailed") -> dict:
             "  - (x2, y2) = 弦号文字区域的**右下角**\n"
             "- 所有值为相对坐标，范围 0.0~1.0，表示占图像宽高的比例\n"
             "- 只框选弦号编号文字本身，不要框选整艘船或船体其他部分\n"
-            "- **重要：仅当 clarity=\"blurry\" 时才需要返回 hull_box**（用于二次精细识别）\n"
+            "- **重要：仅当 clarity=\"blurry\" 时才需要返回 hull_box**\n"
             "- 当 clarity=\"clear\" 或无弦号时，hull_box 必须返回空数组 []\n\n"
             "## clarity 说明\n"
             '- "clear"：弦号文字笔画清晰可辨，能明确读出每个字符\n'
@@ -185,23 +185,13 @@ def _vlm_infer(image_b64: str, prompt_mode: str = "detailed") -> dict:
     }
 
 
-# ── 共享图像缓存（供 re_examine_region 读取，避免 base64 塞入 LLM 上下文）──
-_shared_image_b64: str = ""
-
-
-def set_shared_image(image_b64: str) -> None:
-    """设置共享图像 base64（由 pipeline 在调用 Agent 前设置）。"""
-    global _shared_image_b64
-    _shared_image_b64 = image_b64
-
-
 def build_tools(db: ShipDatabase, include_recognize: bool = False) -> list:
     """构建链路工具。
 
     Args:
         db: 船只数据库实例。
         include_recognize: 是否包含 recognize_ship 工具。
-            False = Agent 模式（默认，VLM 由 pipeline 预调用，Agent 只做二次识别+查找+检索）
+            False = Agent 模式（默认，VLM 由 pipeline 预调用，Agent 只做查找+检索）
             True  = 全链路模式（Agent 自己调 VLM，兼容旧逻辑）
     """
     tools_list: list = []
@@ -215,8 +205,7 @@ def build_tools(db: ShipDatabase, include_recognize: bool = False) -> list:
             第一步：对船只图像进行弦号识别。
             调用视觉大模型分析图像，返回识别到的弦号、船只描述、弦号清晰度和弦号位置。
             返回 JSON 包含：hull_number, description, clarity, hull_box。
-            有弦号且清晰时接下来调 lookup_by_hull_number；
-            有弦号但模糊时调 re_examine_region 对弦号区域二次识别；
+            有弦号时接下来调 lookup_by_hull_number；
             无弦号时调 retrieve_by_description。
             """
             try:
@@ -229,78 +218,12 @@ def build_tools(db: ShipDatabase, include_recognize: bool = False) -> list:
         tools_list.append(recognize_ship)
 
     @tool
-    def re_examine_region(
-        region: Annotated[str, "弦号区域坐标 [x1, y1, x2, y2]，相对坐标 0.0~1.0 的 JSON 数组字符串"],
-    ) -> str:
-        """
-        对图像中指定的弦号区域进行二次精细识别。
-        当 VLM 返回 clarity="blurry" 时调用此工具，
-        将弦号区域裁剪放大后重新识别，可能获得更准确的读数。
-        region 参数为 hull_box 的相对坐标 JSON 数组，如 "[0.1, 0.3, 0.5, 0.6]"。
-        返回 JSON 包含：hull_number, description, clarity。
-        """
-        try:
-            # 解析 region 坐标
-            coords = json.loads(region)
-            if not isinstance(coords, list) or len(coords) != 4:
-                return json.dumps({"error": "region 格式错误，需要 [x1, y1, x2, y2]", "hull_number": "", "description": "", "clarity": ""}, ensure_ascii=False)
-
-            rx1, ry1, rx2, ry2 = [float(c) for c in coords]
-            if not all(0.0 <= c <= 1.0 for c in [rx1, ry1, rx2, ry2]):
-                return json.dumps({"error": "region 坐标超出 [0,1] 范围", "hull_number": "", "description": "", "clarity": ""}, ensure_ascii=False)
-
-            # 从共享缓存获取图像（由 pipeline 在调用 Agent 前设置）
-            import base64 as _b64
-            if not _shared_image_b64:
-                return json.dumps({"error": "图像缓存未设置，请先调用 set_shared_image", "hull_number": "", "description": "", "clarity": ""}, ensure_ascii=False)
-
-            img_bytes = _b64.b64decode(_shared_image_b64)
-            nparr = np.frombuffer(img_bytes, np.uint8)
-            img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-            if img is None:
-                return json.dumps({"error": "图像解码失败", "hull_number": "", "description": "", "clarity": ""}, ensure_ascii=False)
-
-            h, w = img.shape[:2]
-
-            # 相对坐标 → 像素坐标（向外扩展 10% 以包含上下文）
-            box_w = (rx2 - rx1) * w
-            box_h = (ry2 - ry1) * h
-            expand_x = box_w * 0.1
-            expand_y = box_h * 0.1
-
-            px1 = max(0, int((rx1 * w) - expand_x))
-            py1 = max(0, int((ry1 * h) - expand_y))
-            px2 = min(w, int((rx2 * w) + expand_x))
-            py2 = min(h, int((ry2 * h) + expand_y))
-
-            if px2 <= px1 or py2 <= py1:
-                return json.dumps({"error": "裁剪区域无效", "hull_number": "", "description": "", "clarity": ""}, ensure_ascii=False)
-
-            # 裁剪并编码（使用更高质量）
-            cropped = img[py1:py2, px1:px2]
-            _, buf = cv2.imencode(".jpg", cropped, [cv2.IMWRITE_JPEG_QUALITY, 98])
-            cropped_b64 = _b64.b64encode(buf.tobytes()).decode("utf-8")
-
-            # 二次识别（使用详细模式，专注弦号文字）
-            result = _vlm_infer(cropped_b64, prompt_mode="detailed")
-            logger.info("弦号区域二次识别: %s", {k: v for k, v in result.items() if k != "hull_box"})
-            return json.dumps(result, ensure_ascii=False)
-
-        except json.JSONDecodeError:
-            return json.dumps({"error": "region 不是有效的 JSON 数组", "hull_number": "", "description": "", "clarity": ""}, ensure_ascii=False)
-        except Exception as e:
-            logger.exception("弦号区域二次识别失败")
-            return json.dumps({"error": str(e), "hull_number": "", "description": "", "clarity": ""}, ensure_ascii=False)
-
-    tools_list.append(re_examine_region)
-
-    @tool
     def lookup_by_hull_number(
         hull_number: Annotated[str, "要查询的船弦号"],
     ) -> str:
         """
-        第二步：通过弦号精确查找船只描述。
-        recognize_ship 返回有弦号时调用此工具。found=true 则结束；found=false 进入第三步。
+        通过弦号精确查找船只描述。
+        有弦号时调用此工具。found=true 则结束；found=false 进入语义检索。
         """
         hull_number = hull_number.strip()
         desc = db.lookup(hull_number)
@@ -316,8 +239,8 @@ def build_tools(db: ShipDatabase, include_recognize: bool = False) -> list:
         target_description: Annotated[str, "对目标船的外观文字描述，越详细越好"],
     ) -> str:
         """
-        第三步：基于 FAISS 向量库的语义检索。
-        当弦号查不到（第二步 found=false），或 recognize_ship 未识别到弦号时调用。
+        基于 FAISS 向量库的语义检索。
+        当弦号查不到（found=false），或未识别到弦号时调用。
         输入对船只的外观描述，返回最匹配的结果。
         """
         try:
