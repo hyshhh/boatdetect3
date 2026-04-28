@@ -93,6 +93,7 @@ def _vlm_infer(image_b64: str, prompt_mode: str = "detailed") -> dict:
             "- 所有值为相对坐标，范围 0.0~1.0，表示占图像宽高的比例\n"
             "- 只框选弦号编号文字本身，不要框选整艘船或船体其他部分\n"
             "- **重要：仅当 clarity=\"blurry\" 时才需要返回 hull_box**\n"
+            "- hull_box 必须紧密贴合弦号文字边缘，不要留过多空白\n"
             "- 当 clarity=\"clear\" 或无弦号时，hull_box 必须返回空数组 []\n\n"
             "## clarity 说明\n"
             '- "clear"：弦号文字笔画清晰可辨，能明确读出每个字符\n'
