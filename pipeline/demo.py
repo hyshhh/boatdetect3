@@ -243,6 +243,13 @@ class DemoRenderer:
         if crop_w <= 0 or crop_h <= 0:
             return None
 
+        # 对 hull_box 做向外扩展（容差），补偿 VLM 定位误差
+        expand = 0.05  # 每边向外扩展 5%
+        rx1 = max(0.0, rx1 - expand)
+        ry1 = max(0.0, ry1 - expand)
+        rx2 = min(1.0, rx2 + expand)
+        ry2 = min(1.0, ry2 + expand)
+
         # 相对坐标 → frame 坐标
         fx1 = int(cx1 + rx1 * crop_w)
         fy1 = int(cy1 + ry1 * crop_h)
