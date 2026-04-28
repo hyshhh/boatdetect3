@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
+from pathlib import Path
 from typing import Any
 
 from langchain_core.messages import HumanMessage, ToolMessage
@@ -17,9 +18,30 @@ from tools import build_tools
 
 logger = logging.getLogger(__name__)
 
-# ── System Prompt（含 Skills）──────────────────
+# ── Skills 加载 ────────────────────────────────
 
-SYSTEM_PROMPT = """你是船弦号识别助手。VLM 已完成图像预识别，你根据识别结果决策后续操作。
+def _load_skills(skills_dir: str | Path = "skills") -> str:
+    """从 skills/ 目录加载所有 .md 文件，拼接为技能文本。"""
+    skills_path = Path(skills_dir)
+    if not skills_path.is_dir():
+        logger.warning("skills 目录不存在: %s", skills_path)
+        return ""
+
+    parts = []
+    for md_file in sorted(skills_path.glob("*.md")):
+        try:
+            content = md_file.read_text(encoding="utf-8").strip()
+            if content:
+                parts.append(content)
+        except Exception as e:
+            logger.warning("加载 skill 失败 %s: %s", md_file, e)
+
+    return "\n\n---\n\n".join(parts)
+
+
+# ── System Prompt ──────────────────────────────
+
+_BASE_PROMPT = """你是船弦号识别助手。VLM 已完成图像预识别，你根据识别结果决策后续操作。
 
 ## 可用工具
 - lookup_by_hull_number：通过弦号精确查找数据库
@@ -37,16 +59,21 @@ SYSTEM_PROMPT = """你是船弦号识别助手。VLM 已完成图像预识别，
   → found=true：返回「库内确定id：{hull_number}，描述：{description}」
   → found=false：调用 retrieve_by_description 语义检索，返回「可能id：{候选列表}」
 
-注意：模糊弦号（clarity="blurry"）时，VLM 已返回 hull_box 坐标，无需二次识别，直接按上述流程处理。
-
 ### Step 2: 返回结果
 返回格式：「弦号：{hull_number}，描述：{description}，匹配类型：{exact/semantic/none}」
 
 ## 禁止
 - 不要编造弦号或描述
 - 不要跳过任何步骤
-- 不要同时调用多个工具
-"""
+- 不要同时调用多个工具"""
+
+
+def _build_system_prompt(skills_dir: str | Path = "skills") -> str:
+    """构建完整 SYSTEM_PROMPT = 基础提示 + skills 技能文件。"""
+    skills_text = _load_skills(skills_dir)
+    if skills_text:
+        return f"{_BASE_PROMPT}\n\n## 参考技能\n\n{skills_text}"
+    return _BASE_PROMPT
 
 # ── 无 Few-shot 示例（避免误导 Agent）──
 
@@ -91,6 +118,10 @@ class ShipHullAgent:
         # Agent 模式：不含 recognize_ship（VLM 由 pipeline 预调用），含 lookup + retrieve
         self.tools = build_tools(self.db, include_recognize=False)
 
+        # 动态加载 skills 目录，构建完整 system prompt
+        skills_dir = Path(__file__).resolve().parent.parent / "skills"
+        system_prompt = _build_system_prompt(skills_dir)
+
         self._llm = ChatOpenAI(
             model=llm_cfg.get("model", "Qwen/Qwen3-VL-4B-AWQ"),
             api_key=llm_cfg.get("api_key", "abc123"),
@@ -102,7 +133,7 @@ class ShipHullAgent:
         self._agent = create_react_agent(
             model=self._llm,
             tools=self.tools,
-            prompt=SYSTEM_PROMPT,
+            prompt=system_prompt,
         )
 
     def run(self, query: str) -> str:
