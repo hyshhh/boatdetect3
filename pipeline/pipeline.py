@@ -289,21 +289,19 @@ class ShipPipeline:
 
     def _run_agent_chain(self, crop: np.ndarray, track_id: int = 0, frame_id: int = 0) -> AgentResult:
         """
-        Agent 模式执行链路（全链路模式）。
+        Agent 模式执行链路。
 
         链路设计：
         1. Pipeline 预调用 VLM 一次（避免 base64 占用 LLM token）
-        2. 将 VLM 结果传入 Agent，base64 存入共享缓存（供 re_examine_region 使用）
-        3. Agent 根据 clarity 自主决策：
+        2. 将 VLM 结果传入 Agent
+        3. Agent 决策：
            - 无弦号 → retrieve_by_description
-           - 有弦号且清晰 → lookup_by_hull_number
-           - 有弦号但模糊 → re_examine_region（从共享缓存读取图像）→ lookup
-        4. lookup 未命中 → retrieve_by_description 兜底
+           - 有弦号 → lookup_by_hull_number → 未命中则 retrieve_by_description
         """
         if self._agent is None:
             raise RuntimeError("Agent 模式未初始化（use_agent=True 但 agent 为 None）")
 
-        from tools import _vlm_infer, set_shared_image
+        from tools import _vlm_infer
 
         crop_b64 = self._encode_image(crop)
 
@@ -329,9 +327,6 @@ class ShipPipeline:
         if not hull_number and not description:
             return AgentResult(answer="VLM 未返回结果", hull_box=hull_box, clarity=clarity)
 
-        # 设置共享图像缓存（供 re_examine_region 工具读取，不塞入 LLM 上下文）
-        set_shared_image(crop_b64)
-
         # 仅传 VLM 结果给 Agent（不含 base64，大幅减少 token）
         query = (
             f"VLM 识别结果：\n"
@@ -339,7 +334,7 @@ class ShipPipeline:
             f"- 描述：\"{description}\"\n"
             f"- 清晰度：\"{clarity}\"\n"
             f"- 弦号位置：{hull_box}\n\n"
-            f"请根据清晰度决策后续操作。"
+            f"请按照执行链路决策后续操作。"
         )
 
         try:
@@ -388,7 +383,7 @@ class ShipPipeline:
         统一识别调度：根据 use_agent 配置选择硬编码链路或 Agent 工具链。
 
         - use_agent=False → _run_three_step_chain（VLM + 查库 + 语义检索，硬编码逻辑）
-        - use_agent=True  → _run_agent_chain（VLM 预识别 + Agent 自主决策：二次识别/查找/检索）
+        - use_agent=True  → _run_agent_chain（VLM 预识别 + Agent 自主决策：查找/检索）
         """
         with self._latency.measure("agent"):
             if self._use_agent:
