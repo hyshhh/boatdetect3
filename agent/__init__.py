@@ -1,4 +1,4 @@
-"""Agent 核心 — 构建与运行，四步链路：识别 → [二次识别] → 精确查找 → 语义检索"""
+"""Agent 核心 — 构建与运行，三步链路：识别 → 精确查找 → 语义检索"""
 
 from __future__ import annotations
 
@@ -22,7 +22,6 @@ logger = logging.getLogger(__name__)
 SYSTEM_PROMPT = """你是船弦号识别助手。VLM 已完成图像预识别，你根据识别结果决策后续操作。
 
 ## 可用工具
-- re_examine_region：对模糊弦号区域进行二次精细识别（传入 hull_box 坐标）
 - lookup_by_hull_number：通过弦号精确查找数据库
 - retrieve_by_description：通过描述语义检索数据库
 
@@ -33,16 +32,12 @@ SYSTEM_PROMPT = """你是船弦号识别助手。VLM 已完成图像预识别，
 **情况 A — 无弦号（hull_number 为空）：**
 → 直接调用 retrieve_by_description 用 description 做语义检索。
 
-**情况 B — 有弦号且清晰（clarity="clear"）：**
+**情况 B — 有弦号（无论清晰或模糊）：**
 → 调用 lookup_by_hull_number 精确查找。
   → found=true：返回「库内确定id：{hull_number}，描述：{description}」
   → found=false：调用 retrieve_by_description 语义检索，返回「可能id：{候选列表}」
 
-**情况 C — 有弦号但模糊（clarity="blurry"）：**
-→ 先调用 re_examine_region，传入 hull_box 坐标对弦号区域二次识别。
-  → 二次识别得到更清晰的弦号：用新弦号调用 lookup_by_hull_number
-  → 二次识别仍然模糊：用原始弦号调用 lookup_by_hull_number
-  → lookup 未命中：调用 retrieve_by_description 语义检索
+注意：模糊弦号（clarity="blurry"）时，VLM 已返回 hull_box 坐标，无需二次识别，直接按上述流程处理。
 
 ### Step 2: 返回结果
 返回格式：「弦号：{hull_number}，描述：{description}，匹配类型：{exact/semantic/none}」
@@ -79,7 +74,7 @@ class AgentResult:
 
 
 class ShipHullAgent:
-    """船弦号识别 Agent 封装。链路：VLM预识别 → Agent决策（re_examine/lookup/retrieve）。"""
+    """船弦号识别 Agent 封装。链路：VLM预识别 → Agent决策（lookup/retrieve）。"""
 
     def __init__(self, config: dict[str, Any] | None = None):
         self.config = config or load_config()
@@ -93,7 +88,7 @@ class ShipHullAgent:
         )
 
         self.db = ShipDatabase(config=self.config)
-        # Agent 模式：不含 recognize_ship（VLM 由 pipeline 预调用），含 re_examine + lookup + retrieve
+        # Agent 模式：不含 recognize_ship（VLM 由 pipeline 预调用），含 lookup + retrieve
         self.tools = build_tools(self.db, include_recognize=False)
 
         self._llm = ChatOpenAI(
@@ -164,13 +159,6 @@ class ShipHullAgent:
                             hull_box = coords
                     except (ValueError, TypeError):
                         pass
-
-            # re_examine_region 结果（二次识别可能更新 hull_number）
-            if "hull_number" in data and "clarity" in data and "found" not in data and "results" not in data:
-                new_hn = data.get("hull_number", "")
-                if new_hn:
-                    hull_number = new_hn
-                    clarity = data.get("clarity", clarity)
 
             # lookup_by_hull_number（无论 found 与否都保留 hull_number）
             if "found" in data:
