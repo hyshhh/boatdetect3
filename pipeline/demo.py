@@ -165,17 +165,17 @@ class DemoRenderer:
         x1, y1, x2, y2 = det.bbox
 
         # 颜色映射（需求规范）
-        # 绿色：有弦号且匹配库内；黄色：有弦号但未匹配；红色：无弦号
+        # 绿色：有弦号且精确匹配库内；黄色：有弦号或语义匹配；红色：无弦号无匹配
         if track_info and track_info.db_matched:
             color = (0, 200, 0)       # 绿色：精确匹配库内弦号
-        elif track_info and track_info.recognized and track_info.hull_number:
-            color = (0, 215, 255)     # 黄色：有弦号但未匹配库内（无论是否有语义候选）
-        elif track_info and track_info.recognized and not track_info.hull_number:
-            color = (0, 0, 255)       # 红色：无弦号（无论是否有语义匹配）
+        elif track_info and track_info.recognized and (track_info.hull_number or track_info.semantic_match_ids):
+            color = (0, 215, 255)     # 黄色：有弦号或有语义候选，但未精确匹配库内
+        elif track_info and track_info.recognized:
+            color = (0, 0, 255)       # 红色：已识别但无弦号无匹配
         elif track_info and track_info.pending:
             color = (255, 255, 0)     # 青色：识别中
         else:
-            color = (180, 180, 180)   # 灰色：等待
+            color = (180, 180, 180)   # 灰色：等待识别
 
         # 绘制检测框
         cv2.rectangle(canvas, (x1, y1), (x2, y2), color, 2)
@@ -360,14 +360,14 @@ class DemoRenderer:
             blurry_tag = " [模糊]" if clarity == "blurry" else ""
             return f"(未知id：{hull_number}{blurry_tag} 可能：{candidates})"
 
-        # 红色：识别到弦号但无匹配
+        # 黄色：识别到弦号但无匹配
         if hull_number:
             blurry_tag = " [模糊]" if clarity == "blurry" else ""
             if desc:
                 return f"(未知id：{hull_number}{blurry_tag} - {desc})"
             return f"(未知id：{hull_number}{blurry_tag})"
 
-        # 红色：未识别到弦号，通过描述语义匹配
+        # 黄色：未识别到弦号，通过描述语义匹配
         if semantic_ids:
             candidates = "/".join(semantic_ids[:3])
             return f"(未知id：无 可能：{candidates})"
