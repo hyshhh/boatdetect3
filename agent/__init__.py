@@ -41,31 +41,19 @@ def _load_skills(skills_dir: str | Path = "skills") -> str:
 
 # ── System Prompt ──────────────────────────────
 
-_BASE_PROMPT = """你是船弦号识别助手。VLM 已完成图像预识别，你根据识别结果决策后续操作。
+_BASE_PROMPT = """你是船弦号识别助手。根据VLM预识别结果决策操作。
 
-## 可用工具
-- lookup_by_hull_number：通过弦号精确查找数据库
-- retrieve_by_description：通过描述语义检索数据库
+工具：lookup_by_hull_number(弦号精确查找)、retrieve_by_description(描述语义检索)
 
-## 执行链路（必须严格按顺序执行）
+执行流程（严格按顺序）：
+1. 无弦号 → 直接 retrieve_by_description
+2. 有弦号 → lookup_by_hull_number
+   - found=true → 返回结果
+   - found=false → retrieve_by_description 兜底
 
-### Step 1: 根据 VLM 结果判断情况
+返回格式：弦号：{hull_number}，描述：{description}，匹配类型：{exact/semantic/none}
 
-**情况 A — 无弦号（hull_number 为空）：**
-→ 直接调用 retrieve_by_description 用 description 做语义检索。
-
-**情况 B — 有弦号（无论清晰或模糊）：**
-→ 调用 lookup_by_hull_number 精确查找。
-  → found=true：返回「库内确定id：{hull_number}，描述：{description}」
-  → found=false：调用 retrieve_by_description 语义检索，返回「可能id：{候选列表}」
-
-### Step 2: 返回结果
-返回格式：「弦号：{hull_number}，描述：{description}，匹配类型：{exact/semantic/none}」
-
-## 禁止
-- 不要编造弦号或描述
-- 不要跳过任何步骤
-- 不要同时调用多个工具"""
+规则：不编造弦号/描述，不跳步，不同时调用多个工具"""
 
 
 def _build_system_prompt(skills_dir: str | Path = "skills") -> str:
