@@ -421,8 +421,8 @@ class ShipPipeline:
             # 有语义匹配候选 → 黄色或红色
             self._tracker.bind_semantic_matches(track_id, agent_result.semantic_match_ids)
 
-        # 绑定弦号框相对坐标（仅模糊弦号时用于虚线框显示）
-        if agent_result.hull_box and agent_result.clarity == "blurry":
+        # 绑定弦号框相对坐标（VLM返回即绑定，用于虚线框显示）
+        if agent_result.hull_box:
             self._tracker.bind_hull_box(track_id, agent_result.hull_box)
 
         # 绑定弦号清晰度
