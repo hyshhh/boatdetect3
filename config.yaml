@@ -65,10 +65,10 @@ pipeline:
 
   # 定时刷新开关：true 则每隔 gap_num 帧对已识别的 track 重新进行 Agent 识别
   # false 则仅在新 track 出现时识别一次（现有逻辑不变）
-  enable_refresh: false
+  enable_refresh: true
 
   # 刷新间隔帧数（仅在 enable_refresh=true 时生效）
-  gap_num: 150
+  gap_num: 50
 
   # Demo 开关：true 开启视频 demo 可视化，false 关闭
   demo: false
