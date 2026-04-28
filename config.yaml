@@ -37,7 +37,7 @@ pipeline:
   # 级联/并发双模式
   # false = 级联模式：同步等待 Agent 返回结果（简单但阻塞，FPS 低）
   # true  = 并发模式：YOLO 不等待，Agent 异步推理（推荐，FPS 高）
-  concurrent_mode: true
+  concurrent_mode: false
 
   # 最大并发 Agent 推理数
   max_concurrent: 4
@@ -61,7 +61,7 @@ pipeline:
   # Agent/硬编码双模式开关
   # false = 硬编码模式：直接调用 VLM + 查库 + 语义检索，无 LLM Agent 编排
   # true  = Agent 模式：通过 LangChain ReAct Agent 链路调用 3 个工具（recognize_ship → lookup → retrieve）
-  use_agent: false
+  use_agent: true
 
   # 定时刷新开关：true 则每隔 gap_num 帧对已识别的 track 重新进行 Agent 识别
   # false 则仅在新 track 出现时识别一次（现有逻辑不变）
